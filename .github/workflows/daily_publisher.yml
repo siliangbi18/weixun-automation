@@ -1,0 +1,142 @@
+name: Daily Article Publisher
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 早上 8:00 (UTC 00:00)
+    - cron: '0 4 * * *'   # 中午 12:00 (UTC 4:00)
+    - cron: '0 10 * * *'   # 晚上 18:00 (UTC 10:00)
+
+  workflow_dispatch:
+    inputs:
+      type:
+        description: '文章类型'
+        required: true
+        type: choice
+        options:
+          - morning
+          - noon
+          - evening
+        default: 'morning'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests openai pydantic python-dotenv
+
+      - name: Run article publisher
+        env:
+          WEIXUN_APP_ID: ${{ secrets.WEIXUN_APP_ID }}
+          WEIXUN_APP_SECRET: ${{ secrets.WEIXUN_APP_SECRET }}
+          WEIXUN_ACCOUNT_ID: ${{ secrets.WEIXUN_ACCOUNT_ID }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_BASE_URL: ${{ secrets.DEEPSEEK_BASE_URL }}
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          ZHIPU_BASE_URL: ${{ secrets.ZHIPU_BASE_URL }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
+
+        run: |
+          mkdir -p ~/.openclaw/config
+          mkdir -p ~/.openclaw/logs
+
+          cat > ~/.openclaw/openclaw.json << 'EOF'
+          {
+            "models": [
+              {
+                "name": "deepseek-chat",
+                "provider": "deepseek",
+                "base_url": "${DEEPSEEK_BASE_URL}",
+                "api_key": "${DEEPSEEK_API_KEY}"
+              },
+              {
+                "name": "deepseek-reasoner",
+                "provider": "deepseek",
+                "base_url": "${DEEPSEEK_BASE_URL}",
+                "api_key": "${DEEPSEEK_API_KEY}"
+              },
+              {
+                "name": "glm-4-flash",
+                "provider": "zhipuai",
+                "base_url": "${ZHIPU_BASE_URL}",
+                "api_key": "${ZHIPU_API_KEY}"
+              },
+              {
+                "name": "glm-4-plus",
+                "provider": "zhipuai",
+                "base_url": "${ZHIPU_BASE_URL}",
+                "api_key": "${ZHIPU_API_KEY}"
+              },
+              {
+                "name": "qwen-turbo",
+                "provider": "dashscope",
+                "base_url": "${DASHSCOPE_BASE_URL}",
+                "api_key": "${DASHSCOPE_API_KEY}"
+              },
+              {
+                "name": "qwen-plus",
+                "provider": "dashscope",
+                "base_url": "${DASHSCOPE_BASE_URL}",
+                "api_key": "${DASHSCOPE_API_KEY}"
+              },
+              {
+                "name": "qwen-max",
+                "provider": "dashscope",
+                "base_url": "${DASHSCOPE_BASE_URL}",
+                "api_key": "${DASHSCOPE_API_KEY}"
+              }
+            ]
+          }
+          EOF
+
+          cat > ~/.openclaw/secrets.json << 'EOF'
+          {
+            "weixun": {
+              "app_id": "${WEIXUN_APP_ID}",
+              "app_secret": "${WEIXUN_APP_SECRET}",
+              "account_id": "${WEIXUN_ACCOUNT_ID}"
+            },
+            "OLLAMA_MODELS": []
+          }
+          EOF
+
+          ARTICLE_TYPE="${{ github.event.inputs.type }}"
+          if [ -z "$ARTICLE_TYPE" ]; then
+            CURRENT_HOUR=$(date +%H)
+            if [ "$CURRENT_HOUR" -lt 5 ]; then
+              ARTICLE_TYPE="morning"
+            elif [ "$CURRENT_HOUR" -lt 9 ]; then
+              ARTICLE_TYPE="morning"
+            elif [ "$CURRENT_HOUR" -lt 15 ]; then
+              ARTICLE_TYPE="noon"
+            else
+              ARTICLE_TYPE="evening"
+            fi
+          fi
+
+          echo "📝 文章类型: $ARTICLE_TYPE"
+          python scripts/publisher.py \
+            --type "$ARTICLE_TYPE" \
+            --accounts weixun \
+            2>&1 | tee ~/.openclaw/logs/${ARTICLE_TYPE}.log
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: ~/.openclaw/logs/
+          retention-days: 30
